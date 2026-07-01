@@ -1,345 +1,299 @@
 import datetime
+import shutil
+from music21 import chord, instrument, stream, tempo
 import numpy as np
-from music21 import stream
-from music21 import chord,instrument,tempo
-from rnn_model import *
+
+# 導入前一步訓練好的模型與工具函數
 from midi2audio import FluidSynth
+from rnn_model import *
 from song import convert_wav
 
-import shutil
 
+def from_scratch(emotion, midi_num=MIDI_NUM):
+    """當沒有輸入初始 MIDI 時，建立空白序列以進行「從頭盲創（From Scratch）」音樂生成。
 
-def from_scratch(emotion,midi_num=MIDI_NUM):
-    """Creates empty encoded songs for generating music from scratch.
-
-    :param midi_num (int): Number of MIDI files
-    
-    :return data (list): Empty initial music sequences
-    :return filenames (list): Filenames generated based on the date time
+    :param emotion (str): 當前想要生成的情緒標籤
+    :param midi_num (int): 預計一次要生成的歌曲數量
+    :return data (list): 包含多個空白列表的陣列（初始狀態）
+    :return filenames (list): 結合當前時間與情緒所自動生成的檔案名稱列表
     """
-
-    # encoded songs and their file names
     data = []
     filenames = []
 
-    # read current time
-    nowTime = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+    # 獲取當前 UTC 時間並格式化，避免檔名重複
+    nowTime = datetime.datetime.utcnow().strftime("%Y-%m-%d-%H-%M")
     for midi_index in range(midi_num):
+        data.append([])  # 放入空白序列作為生成的起點
+        filenames.append(emotion + nowTime + "-" + str(midi_index + 1))
 
-        data.append([])
-        filenames.append(emotion+nowTime+'-'+str(midi_index+1))
-    # create empty data with names
-
-
-    
     return data, filenames
 
 
 def sample(prediction, temperature=TEMPERATURE):
-    """Sampling the probability vector output by RNN model.
+    """對模型輸出機率向量進行「溫度採樣（Temperature Sampling）」，控制音樂的創造力或規律性。
 
-    :param prediction (ndarray): Probability vector output by RNN model
-    :param temperature (float): 0 is equivalent to argmax/max and inf is equivalent to uniform sampling
-    
-    :return index (int): Index of the sampled result
+    :param prediction (ndarray): 模型預測下一個音符的 Softmax 機率分佈向量
+    :param temperature (float): 溫度係數。越接近 0 越保守（只選機率最高）；越大越隨機瘋狂。
+    :return index (int): 最終抽樣決定出的音符或和弦整數索引
     """
-
-    # change the distribution of probability
+    # 透過數學計算調整機率分佈的陡峭度
     prediction = np.log(prediction) / temperature
     probabilites = np.exp(prediction) / np.sum(np.exp(prediction))
 
-    # random sampling
+    # 依據調整後的機率分佈進行隨機抽樣
     index = np.random.choice(range(len(probabilites)), p=probabilites)
 
     return index
 
 
-def generate_notes(model, data,emotion, filenames,a, max_notes=MAX_BARS):
-    """Generates notes with RNN model.
-
-    :param model: RNN model
-    :param data (list): Encoded songs
-    :param filenames (list): File names of the encoded songs
-    :param max_notes (int): Maximum number of notes to be generated
-    
-    :return:
-    """
-
-    # process each song in data
+def generate_notes(model, data, emotion, filenames, a, max_notes=MAX_BARS):
+    """利用音符 RNN 模型，以滑動視窗方式逐字預測並生成一連串音符。"""
     for index in range(len(data)):
-        
-        # append fillers to the song 
-        song = ['*']*SEGMENT_LENGTH + data[index]
+        # 在開頭塞入長度為 SEGMENT_LENGTH 的填充符 '*'，模擬起始狀態
+        song = ["*"] * SEGMENT_LENGTH + data[index]
 
-        # map each element in the song to int
         try:
-
+            # 取出歌尾固定長度的音符，透過對應字典轉成整數編碼
             input_notes = [note2int[note] for note in song[-SEGMENT_LENGTH:]]
-
         except:
-
-            print("Warning: Unknown notes found in \"%s\"" %filenames[index])
+            print('Warning: Unknown notes found in "%s"' % filenames[index])
             continue
-        
-        midi_path = OUTPUTS_PATH+ '\\' + filenames[index] + '.mid'
-        print("Processing \"%s\"" %midi_path)
+
+        midi_path = OUTPUTS_PATH + "\\" + filenames[index] + ".mid"
+        print('Processing "%s"' % midi_path)
 
         output_note = None
         num_notes = 0
-        n=0
-        # generate note if no '*' is sampled or the number of notes does not exceed the limit
-        while (num_notes<max_notes or max_notes==0) and output_note!='*':
-            
-            # one-hot vectorize input and add an axis to it
-            one_hot_input = to_categorical(input_notes, num_classes=len(NOTE_TO_INT(emotion,a)))
+
+        # 當長度未達上限，且模型沒有抽到停止填充符 '*' 時，持續生成
+        while (num_notes < max_notes or max_notes == 0) and output_note != "*":
+            # 轉換為 One-hot 編碼，並新增一個維度（Batch size = 1）以符合 Keras 輸入格式
+            one_hot_input = to_categorical(
+                input_notes, num_classes=len(NOTE_TO_INT(emotion, a))
+            )
             one_hot_input = one_hot_input[np.newaxis, ...]
 
-            # predict the next note
+            # 模型預測並進行採樣
             prediction = model.predict(one_hot_input)[0]
             note_index = sample(prediction)
             output_note = int2note[note_index]
             print(output_note)
-            # update the input sequence
+
+            # 更新輸入視窗：丟棄最舊的音符，加入剛剛生成的新音符
             input_notes = input_notes[1:]
             input_notes.append(note_index)
-            
+
             num_notes += 1
-            if output_note!='*':
+            if output_note != "*":
                 song.append(output_note)
-        # convert_midi(song[SEGMENT_LENGTH:], midi_path)
+
+        # 回傳切除開頭填充符後，真正生成的音符序列
         return song[SEGMENT_LENGTH:]
 
 
-def generate_chord(model, data,emotion, filenames,a, max_notes=MAX_BARS):
-    """Generates notes with RNN model.
-
-    :param model: RNN model
-    :param data (list): Encoded songs
-    :param filenames (list): File names of the encoded songs
-    :param max_notes (int): Maximum number of notes to be generated
-    
-    :return:
-    """
-
-    # process each song in data
+def generate_chord(model, data, emotion, filenames, a, max_notes=MAX_BARS):
+    """利用和弦 RNN 模型逐字預測並生成和弦序列（邏輯與生成音符完全相同）。"""
     for index in range(len(data)):
-        
-        # append fillers to the song 
-        song = ['*']*SEGMENT_LENGTH + data[index]
+        song = ["*"] * SEGMENT_LENGTH + data[index]
 
-        # map each element in the song to int
         try:
-
             input_notes = [chord2int[note] for note in song[-SEGMENT_LENGTH:]]
-
         except:
-
-            print("Warning: Unknown notes found in \"%s\"" %filenames[index])
+            print('Warning: Unknown notes found in "%s"' % filenames[index])
             continue
-        
-        midi_path = OUTPUTS_PATH+ '\\' + filenames[index] + '.mid'
-        print("Processing \"%s\"" %midi_path)
+
+        midi_path = OUTPUTS_PATH + "\\" + filenames[index] + ".mid"
+        print('Processing "%s"' % midi_path)
 
         output_note = None
         num_notes = 0
-        n=0
-        # generate note if no '*' is sampled or the number of notes does not exceed the limit
-        while (num_notes<max_notes or max_notes==0) and output_note!='*':
-            
-            # one-hot vectorize input and add an axis to it
-            one_hot_input = to_categorical(input_notes, num_classes=len(CHORD_TO_INT(emotion,a)))
+
+        while (num_notes < max_notes or max_notes == 0) and output_note != "*":
+            one_hot_input = to_categorical(
+                input_notes, num_classes=len(CHORD_TO_INT(emotion, a))
+            )
             one_hot_input = one_hot_input[np.newaxis, ...]
 
-            # predict the next note
             prediction = model.predict(one_hot_input)[0]
             note_index = sample(prediction)
             output_note = int2chord[note_index]
             print(output_note)
-            # update the input sequence
+
             input_notes = input_notes[1:]
             input_notes.append(note_index)
-            
+
             num_notes += 1
-            if output_note!='*':
+            if output_note != "*":
                 song.append(output_note)
-        # convert_midi(song[SEGMENT_LENGTH:], midi_path)
-        return song[SEGMENT_LENGTH:],midi_path
 
-def convert_midi(notes,chords, midi_path,ins,bpm):
-    """Converts the encoded song to a midi file.
+        # 除了回傳序列，也把預計輸出的 midi_path 一併帶回
+        return song[SEGMENT_LENGTH:], midi_path
 
-    :param song (list): Encoded song
-    :param midi_path (str): Path to the midi file
-    
-    :return:
+
+def convert_midi(notes, chords, midi_path, ins, bpm):
+    """將模型生成的音符與和弦字串序列，解析並解碼回 music21 物件，最終寫入實體 MIDI 檔案。
+
+    :param notes (list): 生成的音符字串序列（可能包含音高、延音符 '-'、休止符 '0'）
+    :param chords (list): 生成的和弦字串序列
+    :param midi_path (str): 輸出的目標 MIDI 檔案路徑
+    :param ins (str): 使用者指定的樂器名稱（如 'piano', 'guitar'）
+    :param bpm (int): 樂曲的速度（每分鐘節拍數）
     """
-
-    # initialization
     midi_notes = []
     midi_chords = []
     pre_element = None
     duration = 0.0
     offset = 0.0
-    a = [0,4,7]
-    # decode the song
+
+    # --- 第一部分：解碼主旋律音符 (Notes) ---
     for element in notes:
-        
-        if element!='-':
-
-            # create new note
-            if pre_element!=None:
-                if pre_element=='0':
-
-                    new_note = note.Rest()
-                
-                elif pre_element.startswith('['):
-                    a=list(pre_element)
-                    c=list(pre_element)
-                    for i in range(0,len(a)):
-                        
-                        if a[i] == '[' or a[i] == ',' or a[i]==']' or a[i] ==' ':
+        if element != "-":  # 如果遇到新音符（不是延音符）
+            if pre_element != None:
+                if pre_element == "0":
+                    new_note = note.Rest()  # '0' 代表休止符
+                elif pre_element.startswith("["):
+                    # 這一大段是字串解析邏輯，用來把字串形式的清單 "[60, 64, 67]" 解析成真實的整數串列
+                    a = list(pre_element)
+                    c = list(pre_element)
+                    for i in range(0, len(a)):
+                        if (
+                            a[i] == "["
+                            or a[i] == ","
+                            or a[i] == "]"
+                            or a[i] == " "
+                        ):
                             c.remove(a[i])
-                            
-                        elif a[i+1].isdigit():
-                            t = a[i]+a[i+1]
+                        elif a[i + 1].isdigit():
+                            t = a[i] + a[i + 1]
                             c.remove(a[i])
-                            c.remove(a[i+1])
+                            c.remove(a[i + 1])
                             c.insert(i, t)
-                            
-                    
-                    b = list(map(int,c))
+                    b = list(map(int, c))
                     b = list(set(b))
-                    new_note = chord.Chord(b)
-                    
+                    new_note = chord.Chord(b)  # 封裝成 music21 的和弦物件
                 else:
-                    new_note = note.Note(int(pre_element))
+                    new_note = note.Note(int(pre_element))  # 單純的單音符
 
-                new_note.quarterLength = duration
-                new_note.offset = offset
+                new_note.quarterLength = duration  # 賦予音符長度
+                new_note.offset = offset  # 賦予音符在樂曲中的時間軸位置
                 midi_notes.append(new_note)
-            
-            # update offset and save current note
+
             offset += duration
             pre_element = element
-            duration = 0.25
-        
+            duration = 0.25  # 基本單位設為 1/4 拍（十六分音符）
         else:
-            
-            # update duration
-            duration += 0.25
+            duration += 0.25  # 若遇到延音符 '-'，將當前音符長度拉長 1/4 拍
+
+    # --- 第二部分：解碼伴奏和弦 (Chords) ---
     duration = 0.0
     offset = 0.0
     for element in chords:
-        
-        if element!='-' :
-
-            # create new note
-            if pre_element!=None:
-                if pre_element=='0':
-
+        if element != "-":
+            if pre_element != None:
+                if pre_element == "0":
                     new_note = note.Rest()
-                
-                elif pre_element.startswith('['):
-                    a=list(pre_element)
-                    c=list(pre_element)
-                    print(str(a))
-                    for i in range(0,len(a)):
-                        
-                        if a[i] == '[' or a[i] == ',' or a[i]==']' or a[i] ==' ':
+                elif pre_element.startswith("["):
+                    # 與音符處同理的字串清單解析
+                    a = list(pre_element)
+                    c = list(pre_element)
+                    for i in range(0, len(a)):
+                        if (
+                            a[i] == "["
+                            or a[i] == ","
+                            or a[i] == "]"
+                            or a[i] == " "
+                        ):
                             c.remove(a[i])
-                            
-                        elif a[i+1].isdigit():
-                            t = a[i]+a[i+1]
+                        elif a[i + 1].isdigit():
+                            t = a[i] + a[i + 1]
                             c.remove(a[i])
-                            c.remove(a[i+1])
+                            c.remove(a[i + 1])
                             c.insert(i, t)
-                            
-                    
-                    b = list(map(int,c))
+                    b = list(map(int, c))
                     b = list(set(b))
-                    print(str(b))
                     new_note = chord.Chord(b)
-                    print(new_note)
                 else:
                     new_note = note.Note(int(pre_element))
 
                 new_note.quarterLength = duration
                 new_note.offset = offset
                 midi_chords.append(new_note)
-            
-            # update offset and save current note
+
             offset += duration
             pre_element = element
             duration = 0.25
-        
         else:
-            
-            # update duration
             duration += 0.25
-    # save as midi
-    if ins == 'piano':
-        i = instrument.Piano()#樂器變數
-        i2 = instrument.Piano()
-    elif ins == 'guitar':
-        i = instrument.Guitar()#樂器變數
-        i2 = instrument.Guitar()
-    elif ins == 'saxphone':
-        i = instrument.Saxphone()#樂器變數
-        i2 = instrument.Saxphone()
-    elif ins == 'trumpet':
-        i = instrument.Trumpet()#樂器變數
-        i2 = instrument.Trumpet()
-    
+
+    # --- 第三部分：設定樂器音色與寫入檔案 ---
+    if ins == "piano":
+        i, i2 = instrument.Piano(), instrument.Piano()
+    elif ins == "guitar":
+        i, i2 = instrument.Guitar(), instrument.Guitar()
+    elif ins == "saxphone":
+        # 注意：music21 官方拼法通常為 Saxophone，此處若執行出錯，請檢查自訂庫或改拼法
+        i, i2 = instrument.Saxphone(), instrument.Saxphone()
+    elif ins == "trumpet":
+        i, i2 = instrument.Trumpet(), instrument.Trumpet()
+
+    # 建立音樂總譜串流，並分為雙軌（軌道 1 放音符，軌道 2 放和弦）
     score_stream = stream.Stream()
     p1 = stream.Part(midi_notes)
     p2 = stream.Part(midi_chords)
-    score_stream.insert(0,p1)
-    score_stream.insert(1,p2)
-    p1.insert(0,i)
-    p2.insert(0,i2)
+
+    score_stream.insert(0, p1)
+    score_stream.insert(1, p2)
+    p1.insert(0, i)  # 注入主旋律樂器
+    p2.insert(0, i2)  # 注入伴奏樂器
+
+    # 寫入 BPM 樂曲速度
     score_stream.insert([0, tempo.MetronomeMark(number=bpm)])
-    score_stream.insert([1, tempo.MetronomeMark(number=bpm)])#BPM樂曲拍速
-    score_stream.write('mid', fp=midi_path)
-        
+    score_stream.insert([1, tempo.MetronomeMark(number=bpm)])
 
-    
+    # 輸出寫入成實體 .mid 檔案
+    score_stream.write("mid", fp=midi_path)
 
 
-def generator(Note_model,Chord_model,ins,bpm,emotion,a):
-    global note2int,int2note,chord2int,int2chord
+def generator(Note_model, Chord_model, ins, bpm, emotion, a):
+    """音樂生成器主控排程函數。
+
+    設定全域對應表、呼叫 RNN 模型生成序列，並呼叫解碼轉檔。
+    """
+    global note2int, int2note, chord2int, int2chord
+
+    # 如果輸入資料夾有現成音樂，就以它為基底發展（續寫）；沒有就從頭盲創
     if os.listdir(INPUTS_PATH):
-
         data, filenames = encode_data(INPUTS_PATH)
     else:
-
         data, filenames = from_scratch(emotion)
-    note2int = NOTE_TO_INT(emotion,a)
-    int2note = INT_TO_NOTE(emotion,a)
-    chord2int = CHORD_TO_INT(emotion,a)
-    int2chord = INT_TO_CHORD(emotion,a)
 
+    # 載入該情緒與子參數對應的字典對照表
+    note2int = NOTE_TO_INT(emotion, a)
+    int2note = INT_TO_NOTE(emotion, a)
+    chord2int = CHORD_TO_INT(emotion, a)
+    int2chord = INT_TO_CHORD(emotion, a)
 
-    
-    notes = generate_notes(Note_model, data,emotion, filenames,a)
-    
-    
-    
-    chords,midipath = generate_chord(Chord_model, data,emotion, filenames,a)
-    convert_midi(notes,chords,midipath,ins,bpm)
-    convert_wav(midipath,filenames,emotion)
+    # 1. 生成音符序列
+    notes = generate_notes(Note_model, data, emotion, filenames, a)
 
+    # 2. 生成和弦序列
+    chords, midipath = generate_chord(Chord_model, data, emotion, filenames, a)
+
+    # 3. 把序列結合成 MIDI 檔
+    convert_midi(notes, chords, midipath, ins, bpm)
+
+    # 4. 調用外部工具，把 MIDI 電子樂譜渲染成實體音訊 Wave 檔案
+    convert_wav(midipath, filenames, emotion)
 
 
 if __name__ == "__main__":
+    # 測試執行：載入正向/積極（positive）情緒的音符與和弦權重模型
+    Note_model = build_Note_model(
+        emotion="positive", weights_path="weights/positive/Note_weights0.hdf5"
+    )
+    Chord_model = build_Chord_model(
+        emotion="positive", weights_path="weights/positive/Chord_weights0.hdf5"
+    )
 
-    # generate music from scratch or based on existing file
-    # if os.listdir(INPUTS_PATH):
-
-    #     data, filenames = encode_data(INPUTS_PATH)
-    # else:
-
-    #     data, filenames = from_scratch()
-    Note_model = build_Note_model(emotion='positive',weights_path='weights/positive/Note_weights'+str(0)+'.hdf5')
-    Chord_model = build_Chord_model(emotion='positive',weights_path='weights/positive/Chord_weights'+str(0)+'.hdf5')
-    generator(Note_model,Chord_model,'piano',120,'positive')
-    # convert_wav('midi_output/Sweden2.mid','Sweden2.mid')
+    # 啟動生成器：使用鋼琴音色、速度 120 BPM、正面情緒、子參數帶入 0
+    generator(Note_model, Chord_model, "piano", 120, "positive", 0)
