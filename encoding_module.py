@@ -274,6 +274,4 @@ def encoding_song(path, emotion):
 
 
 if __name__ == "__main__":
-    # 注意：這裡直接呼叫會報錯，因為 encoding_song 預期要傳入 path 和 emotion 參數
-    # 例如：encoding_song('./my_midi_dataset', 'positive')
-    encoding_song()
+    encoding_song('./my_midi_dataset', 'positive')
