@@ -5,10 +5,8 @@ from keras import Model
 from keras.layers import Dense, Input, LSTM
 from tensorflow.keras.callbacks import ModelCheckpoint
 
-# 修正：原程式碼從舊版/私有路徑導入，建議統一使用 tf.keras 的 utils
 from tensorflow.keras.utils import to_categorical
-
-# 這些是您自訂的模組，包含音符對應字典與全域變數（如 SEGMENT_LENGTH, RNN_SIZE, BATCH_SIZE, EPOCHS 等）
+# 自訂模組，包含音符對應字典與全域變數
 from encoding_module import *
 from utils import *
 
