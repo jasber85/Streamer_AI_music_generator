@@ -244,6 +244,4 @@ def training_model(x, weight, emotion):
 
 
 if __name__ == "__main__":
-    # 注意：這裡直接執行會噴錯，因為 training_model 預期要傳入 3 個參數 (x, weight, emotion)
-    # 例如：training_model(1, './weights', 'happy')
     training_model()
