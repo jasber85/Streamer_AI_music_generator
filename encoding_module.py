@@ -71,8 +71,8 @@ def encode_note_data(dataset_path):
             # 通常預設抽取第一個軌道（Part 0）作為主要旋律線，並將結構拍平（flat）
             score = score.parts[0].flat
 
-            # （原程式將此行註解了，若要啟用自動移調可打開）
-            # score = transpose(score)
+ 
+            score = transpose(score)
 
             song = []
 
