@@ -78,17 +78,17 @@ def encode_note_data(dataset_path):
 
             # 遍歷軌道中的每一個音樂元素
             for element in score.recurse():
-                # 情況 A：如果是單音符
+                # 如果是單音符
                 if isinstance(element, note.Note):
                     note_pitch = element.pitch.midi  # 轉換成標準 MIDI 數字代碼 (如 60 代表中央C)
                     note_duration = element.quarterLength  # 取得音符時值（以四分音符為單位，1.0 代表一拍）
 
-                # 情況 B：如果是休止符
+                # 如果是休止符
                 elif isinstance(element, note.Rest):
                     note_pitch = 0  # 用 0 代表休止符
                     note_duration = element.quarterLength
 
-                # 情況 C：如果是和弦（在旋律音符模式下，只取和弦的最高音）
+                # 如果是和弦（在旋律音符模式下，只取和弦的最高音）
                 elif isinstance(element, chord.Chord):
                     note_pitch = element.notes[-1].pitch.midi
                     note_duration = element.quarterLength
@@ -98,7 +98,7 @@ def encode_note_data(dataset_path):
 
                 # 檢查音符的長度是否為 0.25 拍（十六分音符）的整數倍，用以規範節奏時間軸
                 if int(note_duration % 0.25) == 0:
-                    # 注意：此處原程式寫死每次都補兩個 '-'，這會固定音符生成的間隔
+                    # 每次都補兩個 '-'，固定音符生成的間隔
                     song += [str(note_pitch)] + ["-"] * 2
                 else:
                     # 如果出現怪異的節奏（如三連音或無法整除的長度），拋出警告並捨棄這首歌
