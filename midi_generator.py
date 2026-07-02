@@ -231,7 +231,6 @@ def convert_midi(notes, chords, midi_path, ins, bpm):
     elif ins == "guitar":
         i, i2 = instrument.Guitar(), instrument.Guitar()
     elif ins == "saxphone":
-        # 注意：music21 官方拼法通常為 Saxophone，此處若執行出錯，請檢查自訂庫或改拼法
         i, i2 = instrument.Saxphone(), instrument.Saxphone()
     elif ins == "trumpet":
         i, i2 = instrument.Trumpet(), instrument.Trumpet()
